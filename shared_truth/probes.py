@@ -7,10 +7,29 @@ import json
 import warnings
 
 import numpy as np
+import sklearn
 import skops.io as sio
 from huggingface_hub import hf_hub_download
 
+from .env import recorded_sklearn_version
+
 __all__ = ["load_probe", "project", "score_one", "score_batch"]
+
+
+def _check_sklearn_version(repo_id, model_path):
+    """Refuse to load a probe under a different scikit-learn than saved it.
+
+    A mismatch doesn't always fail loudly. Across 1.8 it crashes in
+    predict_proba ('no attribute multi_class'), but other version gaps can load
+    fine and score differently. Fail at load time, with the fix in the message.
+    """
+    saved = recorded_sklearn_version(model_path)
+    if saved and saved != sklearn.__version__:
+        raise RuntimeError(
+            f"probe {repo_id} was saved with scikit-learn {saved}, but this runtime has "
+            f"{sklearn.__version__}. Run shared_truth.env.pin_sklearn('{saved}') at the top "
+            f"of a fresh session (or pip install scikit-learn=={saved} and restart)."
+        )
 
 
 def load_probe(repo_id, strict=True):
@@ -28,6 +47,7 @@ def load_probe(repo_id, strict=True):
     artifacts generated before this was fixed. Do not use it for new runs.
     """
     model_path = hf_hub_download(repo_id=repo_id, filename="model.skops")
+    _check_sklearn_version(repo_id, model_path)
     untrusted = sio.get_untrusted_types(file=model_path)
     lr = sio.load(model_path, trusted=untrusted)
 
