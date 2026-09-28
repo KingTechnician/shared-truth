@@ -3,7 +3,7 @@ extraction.
 
 Both extraction paths live here on purpose. They are not equivalent — see
 `check_extraction_parity` — and the paper's central comparison runs across
-them, so the difference should be visible rather than buried in two notebooks.
+them.
 """
 
 import gc

@@ -1,6 +1,6 @@
 """Model registries, repo-name parsing, and canonical pair identifiers.
 
-Pure string/dict work — no torch, no network. Safe to import anywhere.
+
 """
 
 import re

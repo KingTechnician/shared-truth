@@ -5,7 +5,7 @@ overshoot point estimates and the bootstrap CIs were computed by two separate
 implementations in two separate notebooks (`opt_acc` and
 `optimal_accuracy_single`). They agreed on the July 23 reproduction, but only
 because continuous predict_proba output never ties. This is the tie-guarded
-version; both old names now route through it.
+version.
 """
 
 import numpy as np

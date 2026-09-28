@@ -1,12 +1,4 @@
 """Local paths, provenance stamping, and the HF results repo.
-
-Two things beyond moving the old functions:
-
-1. Every payload is stamped with a schema version and the commit SHA of the
-   representation-transfer fork it was produced with. Without that, an artifact
-   in the results repo cannot be traced to the code that made it.
-2. Reads have an HF fallback, so the analysis notebooks run for someone who has
-   never mounted the Drive folder. Previously they only globbed Drive.
 """
 
 import json
@@ -19,11 +11,21 @@ from huggingface_hub import HfApi, create_repo, snapshot_download
 __all__ = [
     "SCHEMA_VERSION", "RESULTS_REPO", "EXPECTED_FILES",
     "pair_dir", "is_complete", "load_cached", "save_payload",
-    "upload_pair", "ensure_local", "provenance",
+    "upload_pair", "ensure_local", "fetch_results", "provenance",
+    "RESULTS_PREFIX", "repo_path",
 ]
 
 SCHEMA_VERSION = 2   # 1 = pre-rebuttal (no per-item scores); 2 = Cell 6b onward
 RESULTS_REPO = "KingTechnician/shared-truth-results"
+
+# The Drive mirror preserved the Drive layout, so pair folders live under
+# sweep-results/ in the repo, and consolidated files (bootstrap, Procrustes
+# summaries) sit at the repo root.
+RESULTS_PREFIX = "sweep-results"
+
+
+def repo_path(pid, filename, prefix=RESULTS_PREFIX):
+    return f"{prefix}/{pid}/{filename}" if prefix else f"{pid}/{filename}"
 
 FORK_PATH = "/content/Closing-Backdoors-Via-Representation-Transfer"
 
@@ -95,19 +97,28 @@ def ensure_local(pid, filename, repo_id=RESULTS_REPO, token=None, cache_dir=None
     """Fetch one artifact from the results repo and return its local path."""
     from huggingface_hub import hf_hub_download
     return hf_hub_download(
-        repo_id=repo_id, repo_type="dataset", filename=f"{pid}/{filename}",
+        repo_id=repo_id, repo_type="dataset", filename=repo_path(pid, filename),
         token=token or os.environ.get("HF_TOKEN"), cache_dir=cache_dir,
     )
 
 
-def fetch_results(pid=None, repo_id=RESULTS_REPO, token=None, local_dir=None):
-    """Snapshot the whole results repo, or just one pair's folder.
+def fetch_results(pid=None, repo_id=RESULTS_REPO, token=None, local_dir=None,
+                  sweeps_only=True):
+    """Snapshot results from the repo; returns the local root directory.
 
-    Use this at the top of an analysis notebook instead of mounting Drive.
+    sweeps_only=True (default) pulls just the sweep_results.json files plus
+    the root-level consolidated JSONs — a few tens of MB. False also pulls the
+    figures and the ~280 MB of activation dumps.
     """
+    if pid:
+        patterns = [f"{RESULTS_PREFIX}/{pid}/*"]
+    elif sweeps_only:
+        patterns = [f"{RESULTS_PREFIX}/*/sweep_results.json", "*.json"]
+    else:
+        patterns = None
     return snapshot_download(
         repo_id=repo_id, repo_type="dataset",
-        allow_patterns=[f"{pid}/*"] if pid else None,
+        allow_patterns=patterns,
         token=token or os.environ.get("HF_TOKEN"),
         local_dir=local_dir,
     )
@@ -129,7 +140,7 @@ def upload_pair(root, pid, repo_id=RESULTS_REPO, token=None, private=True,
 
     d = pair_dir(root, pid)
     ops = [
-        CommitOperationAdd(path_in_repo=f"{pid}/{f}", path_or_fileobj=str(d / f))
+        CommitOperationAdd(path_in_repo=repo_path(pid, f), path_or_fileobj=str(d / f))
         for f in list(EXPECTED_FILES) + list(extra_files)
         if (d / f).exists()
     ]

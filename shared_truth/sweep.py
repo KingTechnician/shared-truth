@@ -1,8 +1,4 @@
 """The alpha-sweep core, for both trained adapters and closed-form maps.
-
-Canonical versions are Cell 6b's: native_ceilings returns (summary, per_item)
-and sweep rows carry per-item scores/preds in dataset order. The Cell 6
-originals are intentionally absent.
 """
 
 import gc

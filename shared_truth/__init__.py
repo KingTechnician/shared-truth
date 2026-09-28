@@ -1,9 +1,6 @@
 """shared_truth — common code for the Shared Truth experiments.
 
-Submodules are imported lazily. `naming`, `metrics`, and `storage` have no
-torch or transformers dependency, so analysis-only notebooks can import them
-without a GPU runtime; `activations` and `sweep` pull in the heavy stack and
-also require the representation-transfer fork on sys.path.
+Lazy imports, no GPU runtime necessary.
 """
 
 import importlib

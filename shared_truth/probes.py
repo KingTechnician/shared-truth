@@ -1,8 +1,6 @@
 """Truth-probe loading, projection onto (t_G, t_P), and scoring.
 
-The single most consequential consolidation in this package: the adapter
-notebook and the Procrustes notebook had different `load_probe` failure
-behavior, and the adapter one could silently produce wrong numbers.
+
 """
 
 import json
