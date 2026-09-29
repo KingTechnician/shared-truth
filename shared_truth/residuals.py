@@ -15,7 +15,7 @@ __all__ = [
     "TABLE_E_ROUND", "TABLE_F_ROUND",
     "trajectory_slug", "table_e", "split_half", "residual_geometry", "table_f",
     "round_published", "compare_published",
-    "TRAINED_VARIANTS", "BASELINE_VARIANTS", "run_ids",
+    "TRAINED_VARIANTS", "SIMPLE_TRAINED_VARIANTS", "BASELINE_VARIANTS", "run_ids",
     "REPROBE_TOL", "TRAINED_MAPS", "check_reprobe_claims",
 ]
 
@@ -27,8 +27,13 @@ TRAJECTORY_ADAPTERS = [
     "KingTechnician/gemma_2_2b_instruct_l13_to_qwen_2.5_1.5b_instruct_l17",
 ]
 
-# The 12 multi-seed runs are TRAINED_VARIANTS on each trajectory; the 6 Mse8
-# baseline runs are BASELINE_VARIANTS. All on the full test set (n=2684).
+# The same 12 adapters (orig + seeds 42-44 on 3 trajectories) were swept twice:
+#   SIMPLE_TRAINED_VARIANTS  simple statements (n=1599), the eval behind the
+#                            rebuttal's multi-seed claims and Table 7
+#   TRAINED_VARIANTS         full test set (n=2684), for the statement-type
+#                            analysis, the baselines, and figures R1/R2
+# The 6 Mse8 baseline runs (BASELINE_VARIANTS) exist on the full test set only.
+SIMPLE_TRAINED_VARIANTS = ["truth_origadapter", "truth_seed42", "truth_seed43", "truth_seed44"]
 TRAINED_VARIANTS = ["stmt_origadapter", "stmt_seed42", "stmt_seed43", "stmt_seed44"]
 BASELINE_VARIANTS = ["stmt_randbase", "stmt_shufbase"]
 
