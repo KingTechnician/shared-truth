@@ -16,6 +16,7 @@ __all__ = [
     "trajectory_slug", "table_e", "split_half", "residual_geometry", "table_f",
     "round_published", "compare_published",
     "TRAINED_VARIANTS", "BASELINE_VARIANTS", "run_ids",
+    "REPROBE_TOL", "TRAINED_MAPS", "check_reprobe_claims",
 ]
 
 # The three multi-seed trajectories (base adapter repos). Seeds, baselines and
@@ -48,6 +49,15 @@ REPROBE_MAX_ITER = 20000
 # 20000. Kept as-is so the published row reproduces.
 NATIVE_REPROBE_MAX_ITER = 2000
 MIN_POLARITY_N = 20
+
+# The re-probe is not bit-reproducible. At C=1e6 on these near-separable
+# activations lbfgs typically stops on its evaluation budget, not on
+# convergence, and where it stops depends on the numerical environment
+# (numpy/scipy/BLAS). The published values are one such stop; a 2026-09-29
+# Colab rerun differed by up to 0.0059 on 8 of 21 rows, with every other
+# column exact. Every row records reprobe_converged. Quote re-probe AUROCs
+# at 2 decimals, and gate the claims (see check_reprobe_claims), not the digits.
+REPROBE_TOL = 0.01
 
 # Rounding used in the published CSVs (tableE_baseline_vs_trained.csv,
 # tableF_residual_geometry.csv).
@@ -126,9 +136,16 @@ def split_half(labels, rng):
 
 
 def _reprobe_auroc(X, labels, tr, te, max_iter):
+    """Held-out AUROC of a fresh probe, and whether lbfgs actually converged."""
+    import warnings
+    from sklearn.exceptions import ConvergenceWarning
+
     lr = LogisticRegression(C=REPROBE_C, max_iter=max_iter)
-    lr.fit(X[tr], labels[tr])
-    return float(roc_auc_score(labels[te], lr.decision_function(X[te])))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", ConvergenceWarning)
+        lr.fit(X[tr], labels[tr])
+    converged = not any(issubclass(w.category, ConvergenceWarning) for w in caught)
+    return float(roc_auc_score(labels[te], lr.decision_function(X[te]))), converged
 
 
 def residual_geometry(npz_path, rng, map_keys=MAP_KEYS):
@@ -171,6 +188,7 @@ def residual_geometry(npz_path, rng, map_keys=MAP_KEYS):
         per_dim_var = max(R.var(axis=0).mean(), 1e-12)
         aniso = float(proj.var() / per_dim_var)
         between = float((proj[mT].mean() - proj[mF].mean()) ** 2 / 4 / per_dim_var)
+        reprobe, converged = _reprobe_auroc(M, labels, tr, te, REPROBE_MAX_ITER)
         rows.append({
             "trajectory": npz_path.stem, "map": key.replace("map_", ""),
             "gap_ratio_tG": truth_gap(M) / gap_nat_G if gap_nat_G else np.nan,
@@ -180,15 +198,18 @@ def residual_geometry(npz_path, rng, map_keys=MAP_KEYS):
             "aniso_between": between,
             "aniso_within": aniso - between,
             "auroc_tG_read": float(roc_auc_score(labels[te], (M @ tG)[te])),
-            "auroc_reprobe": _reprobe_auroc(M, labels, tr, te, REPROBE_MAX_ITER),
+            "auroc_reprobe": reprobe,
+            "reprobe_converged": converged,
         })
 
+    reprobe, converged = _reprobe_auroc(H_T, labels, tr, te, NATIVE_REPROBE_MAX_ITER)
     rows.append({
         "trajectory": npz_path.stem, "map": NATIVE_LABEL,
         "gap_ratio_tG": 1.0, "polgap_ratio_tP": 1.0,
         "resid_aniso_tG": np.nan, "aniso_between": np.nan, "aniso_within": np.nan,
         "auroc_tG_read": float(roc_auc_score(labels[te], (H_T @ tG)[te])),
-        "auroc_reprobe": _reprobe_auroc(H_T, labels, tr, te, NATIVE_REPROBE_MAX_ITER),
+        "auroc_reprobe": reprobe,
+        "reprobe_converged": converged,
     })
     return rows
 
@@ -222,7 +243,7 @@ def round_published(rows, table):
     return out
 
 
-def compare_published(rows, csv_path, table, reprobe_tol=1e-3):
+def compare_published(rows, csv_path, table, reprobe_tol=REPROBE_TOL):
     """Diff computed rows against a published CSV; returns a list of problems.
 
     Rows are rounded to the CSV's precision and must match exactly, except
@@ -253,3 +274,33 @@ def compare_published(rows, csv_path, table, reprobe_tol=1e-3):
             if not same:
                 problems.append(f"{k} {col}: computed {a!r}, published {b!r}")
     return problems
+
+
+TRAINED_MAPS = ["orig", "seed42", "seed43", "seed44"]
+
+
+def check_reprobe_claims(rows):
+    """The rebuttal's rotation-diagnostic claims, checked on Table F rows.
+
+    Returns {claim: (holds, detail)}. These are what the text asserts, so they
+    are what must survive an environment change, unlike the 4th decimal.
+    """
+    def col(maps, c):
+        return [r[c] for r in rows if r["map"] in maps]
+
+    tr_rp, tr_read = col(TRAINED_MAPS, "auroc_reprobe"), col(TRAINED_MAPS, "auroc_tG_read")
+    tr_gap = col(TRAINED_MAPS, "gap_ratio_tG")
+    shuf_rp = col(["shuf_out"], "auroc_reprobe")
+    return {
+        "trained re-probe range is 0.84-0.95 at 2 dp":
+            ((round(min(tr_rp), 2), round(max(tr_rp), 2)) == (0.84, 0.95),
+             f"{min(tr_rp):.4f}-{max(tr_rp):.4f}"),
+        "trained gap ratio along t_G is 0.02-0.11 at 2 dp":
+            ((round(min(tr_gap), 2), round(max(tr_gap), 2)) == (0.02, 0.11),
+             f"{min(tr_gap):.4f}-{max(tr_gap):.4f}"),
+        "re-probe beats the t_G read on every trained map":
+            (all(a > b for a, b in zip(tr_rp, tr_read)),
+             f"min margin {min(a - b for a, b in zip(tr_rp, tr_read)):+.4f}"),
+        "shuffled control re-probes near chance (< 0.60)":
+            (max(shuf_rp) < 0.60, f"max {max(shuf_rp):.4f}"),
+    }
