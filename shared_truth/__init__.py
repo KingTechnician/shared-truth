@@ -9,6 +9,7 @@ __version__ = "0.1.0"
  
 _LAZY = {
     "naming", "probes", "activations", "metrics", "sweep", "plots", "storage", "env",
+    "residuals",
 }
  
 __all__ = sorted(_LAZY)

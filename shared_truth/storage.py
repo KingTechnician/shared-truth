@@ -12,16 +12,17 @@ __all__ = [
     "SCHEMA_VERSION", "RESULTS_REPO", "EXPECTED_FILES",
     "pair_dir", "is_complete", "load_cached", "save_payload",
     "upload_pair", "ensure_local", "fetch_results", "provenance",
-    "RESULTS_PREFIX", "repo_path",
+    "RESULTS_PREFIX", "repo_path", "DUMPS_DIR",
 ]
- 
+
 SCHEMA_VERSION = 2   # 1 = pre-rebuttal (no per-item scores); 2 = Cell 6b onward
 RESULTS_REPO = "KingTechnician/shared-truth-results"
- 
+
 # The Drive mirror preserved the Drive layout, so pair folders live under
 # sweep-results/ in the repo, and consolidated files (bootstrap, Procrustes
 # summaries) sit at the repo root.
 RESULTS_PREFIX = "sweep-results"
+DUMPS_DIR = "activation_dumps"   # under RESULTS_PREFIX; one npz per trajectory
  
  
 def repo_path(pid, filename, prefix=RESULTS_PREFIX):
@@ -103,13 +104,20 @@ def ensure_local(pid, filename, repo_id=RESULTS_REPO, token=None, cache_dir=None
  
  
 def fetch_results(pid=None, repo_id=RESULTS_REPO, token=None, local_dir=None,
-                  sweeps_only=True):
+                  sweeps_only=True, include_dumps=False, include_analysis=False):
     """Snapshot results from the repo; returns the local root directory.
- 
+
     sweeps_only=True (default) pulls just the per-pair JSONs (sweep_results,
     procrustes_sweep) plus the root-level consolidated JSONs — under 100 MB.
-    False also pulls the figures and the ~280 MB of activation dumps.
- 
+    False pulls everything, including the figures.
+
+    With sweeps_only=True, two opt-in additions:
+      include_dumps     the three rebuttal activation dumps
+                        (sweep-results/activation_dumps/*.npz, ~280 MB)
+      include_analysis  the analysis CSVs written by the experiment notebook
+                        (sweep-results/analysis_*/*.csv: Tables A-F), which
+                        are the regression targets for the rebuttal numbers
+
     The returned directory mirrors the Drive layout, so
     Path(root) / RESULTS_PREFIX is a drop-in replacement for OUTPUT_ROOT.
     """
@@ -117,6 +125,10 @@ def fetch_results(pid=None, repo_id=RESULTS_REPO, token=None, local_dir=None,
         patterns = [f"{RESULTS_PREFIX}/{pid}/*"]
     elif sweeps_only:
         patterns = [f"{RESULTS_PREFIX}/*/*.json", "*.json"]
+        if include_dumps:
+            patterns.append(f"{RESULTS_PREFIX}/{DUMPS_DIR}/*.npz")
+        if include_analysis:
+            patterns.append(f"{RESULTS_PREFIX}/analysis_*/*.csv")
     else:
         patterns = None
     return snapshot_download(
