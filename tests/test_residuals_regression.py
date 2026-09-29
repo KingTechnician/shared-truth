@@ -18,11 +18,7 @@ Two layers:
    Pulls ~280 MB of dumps on first run. Set SHARED_TRUTH_RESULTS_DIR to an
    existing snapshot to skip the download. Skips if the Hub is unreachable.
 
-Every column must match the CSV exactly at its published precision, except
-auroc_reprobe: that comes from a nearly unregularized logistic regression
-(C=1e6) on near-separable data, so the optimizer's endpoint can move in the
-4th decimal across BLAS builds or scikit-learn versions. It is held to
-REPROBE_TOL (default 1e-3; override with SHARED_TRUTH_REPROBE_TOL).
+
 """
 
 import csv

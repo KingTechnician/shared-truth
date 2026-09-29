@@ -55,13 +55,13 @@ REPROBE_MAX_ITER = 20000
 NATIVE_REPROBE_MAX_ITER = 2000
 MIN_POLARITY_N = 20
 
-# The re-probe is not bit-reproducible. At C=1e6 on these near-separable
-# activations lbfgs typically stops on its evaluation budget, not on
-# convergence, and where it stops depends on the numerical environment
-# (numpy/scipy/BLAS). The published values are one such stop; a 2026-09-29
-# Colab rerun differed by up to 0.0059 on 8 of 21 rows, with every other
-# column exact. Every row records reprobe_converged. Quote re-probe AUROCs
-# at 2 decimals, and gate the claims (see check_reprobe_claims), not the digits.
+# The re-probe is not bit-reproducible. A rerun differed from
+# the published values by up to 0.0059 on 8 of 21 rows, with every other
+# column exact. Only 1 of 21 fits hit lbfgs's limit, so non-convergence is not
+# the main cause. Likely (unverified): at C=1e6 on near-separable activations
+# the loss is nearly flat along the separating directions, so where lbfgs
+# meets its tolerance depends on the numerical environment (numpy/scipy/BLAS).
+# Rows record reprobe_converged.
 REPROBE_TOL = 0.01
 
 # Rounding used in the published CSVs (tableE_baseline_vs_trained.csv,
