@@ -14,7 +14,8 @@ __all__ = [
     "REPROBE_C", "REPROBE_MAX_ITER", "NATIVE_REPROBE_MAX_ITER", "MIN_POLARITY_N",
     "TABLE_E_ROUND", "TABLE_F_ROUND",
     "trajectory_slug", "table_e", "split_half", "residual_geometry", "table_f",
-    "round_published",
+    "round_published", "compare_published",
+    "TRAINED_VARIANTS", "BASELINE_VARIANTS", "run_ids",
 ]
 
 # The three multi-seed trajectories (base adapter repos). Seeds, baselines and
@@ -24,6 +25,11 @@ TRAJECTORY_ADAPTERS = [
     "KingTechnician/llama_3.2_3b_instruct_l12_to_gemma_2_2b_instruct_l13",
     "KingTechnician/gemma_2_2b_instruct_l13_to_qwen_2.5_1.5b_instruct_l17",
 ]
+
+# The 12 multi-seed runs are TRAINED_VARIANTS on each trajectory; the 6 Mse8
+# baseline runs are BASELINE_VARIANTS. All on the full test set (n=2684).
+TRAINED_VARIANTS = ["stmt_origadapter", "stmt_seed42", "stmt_seed43", "stmt_seed44"]
+BASELINE_VARIANTS = ["stmt_randbase", "stmt_shufbase"]
 
 TABLE_E_MAPS = [
     ("stmt_origadapter", "trained (orig)"),
@@ -56,6 +62,15 @@ def trajectory_slug(base_repo):
     """Adapter repo -> dump stem, e.g. gemma2-2b-instruct_l13_to_llama3_2-3b-instruct_l12."""
     src, sl, tgt, tl = naming.parse_adapter_repo(base_repo)
     return naming.pair_id(src, sl, tgt, tl, "dump").replace("__dump", "")
+
+
+def run_ids(variants=TRAINED_VARIANTS, bases=TRAJECTORY_ADAPTERS):
+    """Pinned pair_ids for the multi-seed trajectories, trajectory-major order."""
+    out = []
+    for base in bases:
+        src, sl, tgt, tl = naming.parse_adapter_repo(base)
+        out += [naming.pair_id(src, sl, tgt, tl, v) for v in variants]
+    return out
 
 
 # --- Table E ----------------------------------------------------------------
@@ -205,3 +220,36 @@ def round_published(rows, table):
                 r[k] = round(float(v), nd)
         out.append(r)
     return out
+
+
+def compare_published(rows, csv_path, table, reprobe_tol=1e-3):
+    """Diff computed rows against a published CSV; returns a list of problems.
+
+    Rows are rounded to the CSV's precision and must match exactly, except
+    auroc_reprobe (Table F), which is held to reprobe_tol.
+    """
+    import csv
+    import math
+
+    def num(v):
+        return math.nan if v in (None, "") else float(v)
+
+    spec = {"E": TABLE_E_ROUND, "F": TABLE_F_ROUND}[table]
+    tol = {c: 0.0 for c in spec}
+    if table == "F":
+        tol["auroc_reprobe"] = reprobe_tol
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        want = {(r["trajectory"], r["map"]): r for r in csv.DictReader(f)}
+    got = {(r["trajectory"], r["map"]): r for r in round_published(rows, table)}
+
+    problems = []
+    if set(got) != set(want):
+        problems.append(f"rows differ: only computed {sorted(set(got) - set(want))}, "
+                        f"only published {sorted(set(want) - set(got))}")
+    for k in sorted(set(got) & set(want)):
+        for col, t in tol.items():
+            a, b = num(got[k][col]), num(want[k][col])
+            same = (math.isnan(a) and math.isnan(b)) or abs(a - b) <= t + 1e-12
+            if not same:
+                problems.append(f"{k} {col}: computed {a!r}, published {b!r}")
+    return problems
