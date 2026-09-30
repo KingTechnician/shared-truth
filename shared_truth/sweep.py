@@ -19,6 +19,7 @@ __all__ = [
     "ALPHA_SWEEP", "METADATA_COLS", "DATASET_ID", "PairSpec",
     "native_ceilings", "alpha_sweep", "run_pair_full",
     "fit_procrustes", "alpha_sweep_with_adapter",
+    "load_test_set", "run_all", "replot_all",
 ]
 
 ALPHA_SWEEP = [round(x * 0.1, 1) for x in range(11)]
@@ -179,6 +180,50 @@ def run_pair_full(spec, src_id, src_l, tgt_id, tgt_l,
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     return payload
+
+
+def run_all(specs, output_root, statement_type=None, force=False, plot=True):
+    """Sweep each PairSpec into output_root/<pair_id>/. Nothing is uploaded.
+
+    Skips a pair whose sweep_results.json already exists unless force=True, so
+    an interrupted session resumes where it stopped. Returns {pair_id: payload}.
+    """
+    import json
+    from pathlib import Path
+    from . import plots
+
+    out = {}
+    for spec in specs:
+        src_id, src_l, tgt_id, tgt_l, pid = spec.resolve()
+        path = storage.pair_dir(output_root, pid) / "sweep_results.json"
+        if path.exists() and not force:
+            print(f"skip {pid} (exists)")
+            out[pid] = json.load(open(path))
+            continue
+        print(f"run  {pid}")
+        payload = run_pair_full(
+            spec, src_id, src_l, tgt_id, tgt_l,
+            naming.probe_repo_for(src_id, src_l), naming.probe_repo_for(tgt_id, tgt_l),
+            output_root, statement_type=statement_type,
+        )
+        if plot:
+            plots.plot_all(payload, storage.pair_dir(output_root, pid))
+        out[pid] = payload
+    return out
+
+
+def replot_all(output_root, pair_ids):
+    """Re-render the three per-pair figures from saved JSON (no GPU)."""
+    import json
+    from . import plots
+
+    for pid in pair_ids:
+        path = storage.pair_dir(output_root, pid) / "sweep_results.json"
+        if not path.exists():
+            print(f"miss {pid}")
+            continue
+        plots.plot_all(json.load(open(path)), storage.pair_dir(output_root, pid))
+        print(f"plot {pid}")
 
 
 # --- closed-form baseline ---------------------------------------------------

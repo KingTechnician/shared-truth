@@ -16,7 +16,7 @@ __all__ = [
     "strict_overshoot", "tau0_peak_delta",
     "safe_auroc", "boot_auroc_ci", "bootstrap_trajectory",
     "statement_group", "unit",
-    "DEFAULT_N_BOOT", "DEFAULT_MIN_N",
+    "DEFAULT_N_BOOT", "DEFAULT_MIN_N", "sweep_diff",
 ]
 
 DEFAULT_N_BOOT = 2000
@@ -196,3 +196,34 @@ def unit(v):
     v = np.asarray(v, np.float64).ravel()
     n = np.linalg.norm(v)
     return v / n if n > 0 else v
+
+
+def sweep_diff(new_sweep, saved_sweep):
+    """Per-alpha comparison of a re-run sweep against a saved one.
+
+    Works on both row schemas: true/false scores (every run) and per-item
+    preds (Cell 6b onward). items_differing counts changed predictions when
+    both sides have preds; otherwise it is the accuracy change in items, a
+    lower bound. fp16 matmuls can differ in the last bit across GPUs, so the
+    check is stated in items, not float tolerance.
+    """
+    out = []
+    for a, b in zip(new_sweep, saved_sweep, strict=True):
+        if round(a["alpha"], 1) != round(b["alpha"], 1):
+            raise ValueError(f"alpha mismatch: {a['alpha']} vs {b['alpha']}")
+        ta, tb = np.asarray(a["true_scores"]), np.asarray(b["true_scores"])
+        fa, fb = np.asarray(a["false_scores"]), np.asarray(b["false_scores"])
+        if ta.shape != tb.shape or fa.shape != fb.shape:
+            raise ValueError(f"alpha {a['alpha']}: item counts differ "
+                             f"({len(ta)}+{len(fa)} vs {len(tb)}+{len(fb)})")
+        n = len(ta) + len(fa)
+        exact = "preds" in a and "preds" in b
+        items = (int((np.asarray(a["preds"]) != np.asarray(b["preds"])).sum()) if exact
+                 else int(round(abs(a["accuracy"] - b["accuracy"]) * n)))
+        out.append({
+            "alpha": a["alpha"], "items_differing": items, "items_exact": exact,
+            "max_abs_dscore": float(max(np.abs(ta - tb).max(initial=0),
+                                        np.abs(fa - fb).max(initial=0))),
+            "abs_dauroc": abs(a["auroc"] - b["auroc"]),
+        })
+    return out

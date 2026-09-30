@@ -9,6 +9,7 @@ __all__ = [
     "MODEL_REGISTRY", "PROBE_SLUGS", "DISPLAY_NAMES", "ADAPTER_RE",
     "parse_adapter_repo", "probe_repo_for", "pair_id", "display_pair_label",
     "short_name", "adapter_tag", "parse_sweep_dir",
+    "adapter_from_payload",
 ]
 
 MODEL_REGISTRY = {
@@ -133,3 +134,24 @@ def parse_sweep_dir(dirname):
         "variant": m["variant"], "tag": adapter_tag(m["variant"]),
         "pair_id": dirname,
     }
+
+
+def adapter_from_payload(payload):
+    """(adapter_repo, subfolder, variant) recorded in a saved sweep payload.
+
+    Lets a published run be re-swept from its own sweep_results.json. Checks
+    that the adapter repo resolves to the payload's models and layers, and
+    refuses baseline payloads, which record no loadable adapter.
+    """
+    ad = payload.get("adapter") or {}
+    repo, sub = ad.get("repo"), ad.get("subfolder")
+    if not repo or not sub:
+        raise ValueError(f"{payload.get('pair_id')}: no adapter repo/subfolder recorded "
+                         f"(baseline runs are regenerated separately)")
+    src, sl, tgt, tl = parse_adapter_repo(repo)
+    want = (payload["source_model"], payload["source_layer"],
+            payload["target_model"], payload["target_layer"])
+    if (src, sl, tgt, tl) != want:
+        raise ValueError(f"{payload.get('pair_id')}: adapter {repo} resolves to "
+                         f"{(src, sl, tgt, tl)}, payload says {want}")
+    return repo, sub, payload["variant"]
