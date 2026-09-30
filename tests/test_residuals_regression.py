@@ -34,7 +34,7 @@ from sklearn.metrics import roc_auc_score
 
 from shared_truth import residuals, storage
 
-REPROBE_TOL = float(os.environ.get("SHARED_TRUTH_REPROBE_TOL", "1e-3"))
+REPROBE_TOL = float(os.environ.get("SHARED_TRUTH_REPROBE_TOL", residuals.REPROBE_TOL))
 ANALYSIS_DIR = "analysis_residuals"
 
 

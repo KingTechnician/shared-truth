@@ -1,4 +1,4 @@
-"""Rebuttal Tables E and F: baseline controls and residual geometry.
+"""Rebuttal tables: A-D (statement types), E (baselines), F (residual geometry).
 """
 
 from pathlib import Path
@@ -17,6 +17,7 @@ __all__ = [
     "round_published", "compare_published",
     "TRAINED_VARIANTS", "SIMPLE_TRAINED_VARIANTS", "BASELINE_VARIANTS", "run_ids",
     "REPROBE_TOL", "TRAINED_MAPS", "check_reprobe_claims",
+    "STATEMENT_TABLES", "statement_type_tables", "compare_statement_tables",
 ]
 
 # The three multi-seed trajectories (base adapter repos). Seeds, baselines and
@@ -309,3 +310,163 @@ def check_reprobe_claims(rows):
         "shuffled control re-probes near chance (< 0.60)":
             (max(shuf_rp) < 0.60, f"max {max(shuf_rp):.4f}"),
     }
+
+
+# --- Tables A-D: statement types ---------------------------------------------
+# The published CSVs were computed over the 12 full-test-set trained runs only (the baselines came
+# later), in sorted pair_id order, with one RNG seeded 0 and 1000 resamples.
+
+PLATEAU_ALPHAS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]
+KEY_ALPHAS = [0.0, 0.7, 1.0]
+PLATEAU_TOL = 0.02      # plateau "holds" if min AUROC over alpha<=0.7 >= native - tol
+COLLAPSE_AUROC = 0.60   # collapse "occurs" if AUROC at alpha=1 <= this
+STATEMENT_MIN_N = 20
+STATEMENT_N_BOOT = 1000
+
+# key -> published CSV stem under sweep-results/analysis_statement_types/
+STATEMENT_TABLES = {
+    "A": "tableA_per_run_detail",
+    "B": "tableB_trajectory_aggregate",
+    "C": "tableC_structural_consistency",
+    "D": "tableD_bootstrap_cis",
+    "long": "long_form_all_metrics",
+}
+
+
+def statement_type_tables(sweeps_root, ids=None, seed=0, n_boot=STATEMENT_N_BOOT):
+    """Tables A-D and the long-form table, as DataFrames rounded as published.
+
+    ids defaults to the 12 full-test-set trained runs. They are processed in
+    sorted order.
+    """
+    import json
+    import pandas as pd
+
+    ids = sorted(ids if ids is not None else run_ids(TRAINED_VARIANTS))
+    rng = np.random.default_rng(seed)
+    long_rows, ci_rows, struct_rows = [], [], []
+
+    for pid in ids:
+        pl = json.load(open(Path(sweeps_root) / pid / "sweep_results.json"))
+        traj, tag = pl["display_label"], naming.adapter_tag(pl["variant"])
+        items = pl["items"]
+        labels = np.array([it["label"] for it in items])
+        groups = np.array([metrics.statement_group(it) for it in items])
+        sweep = {round(r["alpha"], 1): r for r in pl["alpha_sweep"]}
+
+        for g in ["all"] + sorted(set(groups)):
+            mask = np.ones(len(items), bool) if g == "all" else (groups == g)
+            n = int(mask.sum())
+            if n < STATEMENT_MIN_N:
+                continue
+            g_labels = labels[mask]
+
+            per_alpha = {}
+            for a, row in sweep.items():
+                preds = np.array(row["preds"])[mask]
+                per_alpha[a] = {
+                    "auroc": metrics.safe_auroc(g_labels, np.array(row["scores"])[mask],
+                                                min_n=STATEMENT_MIN_N),
+                    "accuracy": float((preds == g_labels).mean()),
+                }
+                long_rows.append({"trajectory": traj, "adapter": tag, "group": g, "n": n,
+                                  "alpha": a, **per_alpha[a]})
+
+            native = per_alpha[0.0]["auroc"]
+            plateau = [per_alpha[a]["auroc"] for a in PLATEAU_ALPHAS if a in per_alpha]
+            plateau_min = float(np.nanmin(plateau)) if plateau else np.nan
+            final = per_alpha[1.0]["auroc"]
+            struct_rows.append({
+                "trajectory": traj, "adapter": tag, "group": g, "n": n,
+                "native_auroc": native,
+                "plateau_min_auroc": plateau_min,
+                "plateau_mean_auroc": float(np.nanmean(plateau)) if plateau else np.nan,
+                "alpha1_auroc": final,
+                "collapse_delta": (native - final)
+                                  if not (np.isnan(native) or np.isnan(final)) else np.nan,
+                "plateau_holds": (bool(plateau_min >= native - PLATEAU_TOL)
+                                  if not np.isnan(plateau_min) else None),
+                "collapses_at_1": bool(final <= COLLAPSE_AUROC) if not np.isnan(final) else None,
+                "native_acc": per_alpha[0.0]["accuracy"],
+                "alpha1_acc": per_alpha[1.0]["accuracy"],
+            })
+
+            for a in KEY_ALPHAS:
+                scores = np.array(sweep[a]["scores"])[mask]
+                lo, hi = metrics.boot_auroc_ci(g_labels, scores, rng, n_boot=n_boot,
+                                               min_n=STATEMENT_MIN_N)
+                ci_rows.append({"trajectory": traj, "adapter": tag, "group": g, "n": n,
+                                "alpha": a,
+                                "auroc": metrics.safe_auroc(g_labels, scores,
+                                                            min_n=STATEMENT_MIN_N),
+                                "ci_lo": lo, "ci_hi": hi})
+
+    long_df, struct_df, ci_df = (pd.DataFrame(r) for r in (long_rows, struct_rows, ci_rows))
+
+    table_a = struct_df[[
+        "trajectory", "adapter", "group", "n",
+        "native_auroc", "plateau_min_auroc", "alpha1_auroc", "collapse_delta",
+        "native_acc", "alpha1_acc",
+    ]].sort_values(["trajectory", "group", "adapter"]).round(4)
+
+    table_b = struct_df.groupby(["trajectory", "group"]).agg(
+        n=("n", "first"),
+        runs=("adapter", "count"),
+        native_auroc_mean=("native_auroc", "mean"),
+        native_auroc_sd=("native_auroc", "std"),
+        plateau_min_mean=("plateau_min_auroc", "mean"),
+        plateau_min_sd=("plateau_min_auroc", "std"),
+        alpha1_auroc_mean=("alpha1_auroc", "mean"),
+        alpha1_auroc_sd=("alpha1_auroc", "std"),
+        collapse_delta_mean=("collapse_delta", "mean"),
+    ).reset_index().round(4)
+
+    def _count(col):
+        vals = [v for v in col if v is not None]
+        return f"{sum(bool(v) for v in vals)}/{len(vals)}"
+
+    table_c = struct_df.groupby("group").agg(
+        runs=("adapter", "count"),
+        plateau_holds=("plateau_holds", _count),
+        collapses_at_alpha1=("collapses_at_1", _count),
+    ).reset_index()
+
+    return {"A": table_a, "B": table_b, "C": table_c,
+            "D": ci_df.round(4), "long": long_df.round(4)}
+
+
+def compare_statement_tables(tables, analysis_dir):
+    """Diff tables against the published CSVs; returns {key: [problems]}.
+
+    Compared as CSV text round-trips, so a match means the published file
+    would be rewritten byte for byte in content.
+    """
+    import io
+    import pandas as pd
+
+    out = {}
+    for key, df in tables.items():
+        want = pd.read_csv(Path(analysis_dir) / f"{STATEMENT_TABLES[key]}.csv")
+        got = pd.read_csv(io.StringIO(df.to_csv(index=False)))
+        probs = []
+        if list(got.columns) != list(want.columns):
+            probs.append(f"columns differ: {list(got.columns)} vs {list(want.columns)}")
+        elif got.shape != want.shape:
+            probs.append(f"shape differs: {got.shape} vs {want.shape}")
+        else:
+            got, want = got.reset_index(drop=True), want.reset_index(drop=True)
+            for col in got.columns:
+                a, b = got[col], want[col]
+                if a.dtype.kind in "fi" and b.dtype.kind in "fi":
+                    diff = ~((a == b) | (a.isna() & b.isna()))
+                else:
+                    diff = a.astype(str) != b.astype(str)
+                for i in np.flatnonzero(diff.to_numpy())[:5]:
+                    va, vb = a[i], b[i]
+                    va, vb = (va.item() if hasattr(va, "item") else va,
+                              vb.item() if hasattr(vb, "item") else vb)
+                    probs.append(f"row {i} {col}: computed {va!r}, published {vb!r}")
+                if diff.sum() > 5:
+                    probs.append(f"... {int(diff.sum()) - 5} more in {col}")
+        out[key] = probs
+    return out
