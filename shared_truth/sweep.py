@@ -32,6 +32,7 @@ class PairSpec:
     adapter_repo: str
     adapter_subfolder: str = "model"
     variant: str = "truth"
+    revision: str = None   # branch, tag, or commit; None = HEAD. The resolved commit is recorded.
 
     def resolve(self):
         src_id, src_l, tgt_id, tgt_l = naming.parse_adapter_repo(self.adapter_repo)
@@ -136,7 +137,9 @@ def run_pair_full(spec, src_id, src_l, tgt_id, tgt_l,
     install_monkeypatch()
     src_tok, src_wrap = load_model(src_id)
     tgt_tok, tgt_wrap = load_model(tgt_id)
-    mapper, adapter_cfg = load_adapter(spec.adapter_repo, spec.adapter_subfolder)
+    adapter_rev = storage.resolve_revision(spec.adapter_repo, spec.revision)
+    mapper, adapter_cfg = load_adapter(spec.adapter_repo, spec.adapter_subfolder,
+                                       revision=adapter_rev)
     tgt_probe, tgt_dirs = load_probe(tgt_probe_repo, strict=strict_probes)
     src_probe, src_dirs = load_probe(src_probe_repo, strict=strict_probes)
 
@@ -162,6 +165,7 @@ def run_pair_full(spec, src_id, src_l, tgt_id, tgt_l,
         "variant": spec.variant,
         "adapter": {"repo": spec.adapter_repo,
                     "subfolder": spec.adapter_subfolder,
+                    "revision": adapter_rev,
                     "config": adapter_cfg},
         "probes": {"source": src_probe_repo, "target": tgt_probe_repo},
         "n_test": len(labels),

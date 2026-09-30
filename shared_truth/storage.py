@@ -13,14 +13,13 @@ __all__ = [
     "pair_dir", "is_complete", "load_cached", "save_payload",
     "upload_pair", "ensure_local", "fetch_results", "provenance",
     "RESULTS_PREFIX", "repo_path", "DUMPS_DIR",
+    "resolve_revision", "verify_adapter", "AdapterMismatchError",
 ]
 
 SCHEMA_VERSION = 2   # 1 = pre-rebuttal (no per-item scores); 2 = Cell 6b onward
 RESULTS_REPO = "KingTechnician/shared-truth-results"
 
-# The Drive mirror preserved the Drive layout, so pair folders live under
-# sweep-results/ in the repo, and consolidated files (bootstrap, Procrustes
-# summaries) sit at the repo root.
+
 RESULTS_PREFIX = "sweep-results"
 DUMPS_DIR = "activation_dumps"   # under RESULTS_PREFIX; one npz per trajectory
  
@@ -118,8 +117,7 @@ def fetch_results(pid=None, repo_id=RESULTS_REPO, token=None, local_dir=None,
                         (sweep-results/analysis_*/*.csv: Tables A-F), which
                         are the regression targets for the rebuttal numbers
 
-    The returned directory mirrors the Drive layout, so
-    Path(root) / RESULTS_PREFIX is a drop-in replacement for OUTPUT_ROOT.
+
     """
     if pid:
         patterns = [f"{RESULTS_PREFIX}/{pid}/*"]
@@ -166,3 +164,50 @@ def upload_pair(root, pid, repo_id=RESULTS_REPO, token=None, private=True,
     api.create_commit(repo_id, repo_type="dataset", operations=ops,
                       commit_message=f"results: {pid}", token=token)
     print(f"uploaded {len(ops)} files for {pid}")
+
+
+# --- adapter revisions ------------------------------------------------------
+
+class AdapterMismatchError(RuntimeError):
+    """The adapter repo serves different weights than the ones a saved run used."""
+
+
+def resolve_revision(repo_id, revision=None, token=None):
+    """Branch, tag, or None (HEAD) -> the commit hash the Hub serves for it now."""
+    return HfApi(token=token or os.environ.get("HF_TOKEN")).model_info(repo_id, revision=revision).sha
+
+
+def verify_adapter(payload, revision=None, token=None):
+    """Confirm the adapter a saved run used is what the repo serves; return its commit hash.
+
+    Looks up the adapter at `revision`, else at the revision the run recorded,
+    else HEAD, downloads only its config.json, and compares it with the
+    `adapter.config` saved in the payload (the config.json loaded at run time,
+    including the training metrics). A retrained checkpoint differs there even
+    with identical hyperparameters. Raises AdapterMismatchError on a mismatch.
+    """
+    from huggingface_hub import hf_hub_download
+
+    ad = payload.get("adapter") or {}
+    repo, sub = ad.get("repo"), ad.get("subfolder")
+    if not repo or not sub:
+        raise ValueError(f"{payload.get('pair_id')}: no adapter repo/subfolder recorded")
+    requested = revision or ad.get("revision")
+    tok = token or os.environ.get("HF_TOKEN")
+    sha = resolve_revision(repo, requested, token=tok)
+    recorded = ad.get("config")
+    if recorded is None:
+        return sha
+    with open(hf_hub_download(repo_id=repo, filename="config.json", subfolder=sub,
+                              revision=sha, token=tok)) as f:
+        current = json.load(f)
+    if current != recorded:
+        keys = sorted(k for k in set(recorded) | set(current) if recorded.get(k) != current.get(k))
+        fvu = lambda c: (c.get("metrics") or {}).get("fvu")
+        raise AdapterMismatchError(
+            f"{payload.get('pair_id')}: {repo}@{sha[:10]} serves a different checkpoint than "
+            f"this run used (differs in {keys}; fvu recorded {fvu(recorded)} vs now {fvu(current)}). "
+            + ("The run recorded no revision, so HEAD was checked; if the repo has history, pass "
+               "revision= the commit whose config matches." if not requested else
+               f"Requested revision {requested!r}."))
+    return sha

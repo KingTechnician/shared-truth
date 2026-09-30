@@ -137,11 +137,14 @@ def parse_sweep_dir(dirname):
 
 
 def adapter_from_payload(payload):
-    """(adapter_repo, subfolder, variant) recorded in a saved sweep payload.
+    """(adapter_repo, subfolder, variant, revision) recorded in a saved sweep payload.
 
-    Lets a published run be re-swept from its own sweep_results.json. Checks
-    that the adapter repo resolves to the payload's models and layers, and
-    refuses baseline payloads, which record no loadable adapter.
+    Lets a published run be re-swept from its own sweep_results.json; the tuple
+    unpacks straight into sweep.PairSpec. revision is None for runs saved
+    before revisions were recorded (all published runs) -- confirm those with
+    storage.verify_adapter before re-sweeping. Checks that the adapter repo
+    resolves to the payload's models and layers, and refuses baseline
+    payloads, which record no loadable adapter.
     """
     ad = payload.get("adapter") or {}
     repo, sub = ad.get("repo"), ad.get("subfolder")
@@ -154,4 +157,4 @@ def adapter_from_payload(payload):
     if (src, sl, tgt, tl) != want:
         raise ValueError(f"{payload.get('pair_id')}: adapter {repo} resolves to "
                          f"{(src, sl, tgt, tl)}, payload says {want}")
-    return repo, sub, payload["variant"]
+    return repo, sub, payload["variant"], ad.get("revision")

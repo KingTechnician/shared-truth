@@ -1,9 +1,12 @@
 """CPU tests for the helpers the adapter notebook's regression check relies on."""
 
+import json
+import types
+
 import numpy as np
 import pytest
 
-from shared_truth import metrics, naming
+from shared_truth import metrics, naming, storage
 
 
 def _payload(**over):
@@ -18,8 +21,10 @@ def _payload(**over):
 
 
 def test_adapter_from_payload_roundtrip():
-    repo, sub, variant = naming.adapter_from_payload(_payload())
-    assert sub.endswith("/model") and variant == "truth"
+    repo, sub, variant, rev = naming.adapter_from_payload(_payload())
+    assert sub.endswith("/model") and variant == "truth" and rev is None   # published runs: unpinned
+    ad = dict(_payload()["adapter"], revision="abc123")
+    assert naming.adapter_from_payload(_payload(adapter=ad))[3] == "abc123"
     # seed-suffixed repos resolve to the same pair
     p = _payload(adapter={"repo": "KingTechnician/gemma_2_2b_instruct_l13_to_qwen_2.5_1.5b_instruct_l17_seed_43",
                           "subfolder": "x/model"}, variant="truth_seed43")
@@ -68,3 +73,62 @@ def test_sweep_diff_refuses_different_eval():
     a, b = _sweep(np.random.default_rng(2)), _sweep(np.random.default_rng(3), n1=41)
     with pytest.raises(ValueError, match="item counts differ"):
         metrics.sweep_diff(a, b)
+
+
+# --- adapter revisions ---------------------------------------------------------
+
+_CFG = {"hidden_dim": 1881, "seed": 42, "source_dim": 2304, "target_dim": 1536,
+        "metrics": {"fvu": 0.005051200951001585, "cosine_similarity": 0.7174309265053872}}
+
+
+@pytest.fixture
+def hub(tmp_path, monkeypatch):
+    """Fake Hub: {revision -> (sha, config.json)} for one repo; HEAD is key None."""
+    state = {"revs": {None: ("sha_head", _CFG)}, "asked": []}
+
+    class FakeApi:
+        def __init__(self, token=None): pass
+        def model_info(self, repo_id, revision=None):
+            state["asked"].append(revision)
+            if revision in state["revs"]:
+                return types.SimpleNamespace(sha=state["revs"][revision][0])
+            for sha, _ in state["revs"].values():      # a raw commit hash resolves to itself
+                if sha == revision:
+                    return types.SimpleNamespace(sha=sha)
+            raise KeyError(revision)
+
+    def fake_download(repo_id, filename, subfolder=None, revision=None, token=None):
+        cfg = next(c for sha, c in state["revs"].values() if sha == revision)
+        path = tmp_path / f"{revision}.json"
+        path.write_text(json.dumps(cfg))
+        return str(path)
+
+    monkeypatch.setattr(storage, "HfApi", FakeApi)
+    import huggingface_hub
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
+    return state
+
+
+def test_verify_adapter_matching_checkpoint_returns_head_sha(hub):
+    p = _payload(adapter=dict(_payload()["adapter"], config=_CFG))
+    assert storage.verify_adapter(p) == "sha_head"
+
+
+def test_verify_adapter_detects_retrained_checkpoint(hub):
+    # same hyperparameters, different training outcome -- the floor-pair seed situation
+    old = dict(_CFG, metrics={"fvu": 0.0377, "cosine_similarity": 0.689})
+    p = _payload(adapter=dict(_payload()["adapter"], config=old))
+    with pytest.raises(storage.AdapterMismatchError, match=r"fvu recorded 0.0377 vs now 0.005"):
+        storage.verify_adapter(p)
+
+
+def test_verify_adapter_uses_recorded_revision(hub):
+    old = dict(_CFG, metrics={"fvu": 0.0377})
+    hub["revs"]["sha_old"] = ("sha_old", old)
+    p = _payload(adapter=dict(_payload()["adapter"], config=old, revision="sha_old"))
+    assert storage.verify_adapter(p) == "sha_old"                  # pinned run: its own weights
+    assert hub["asked"][-1] == "sha_old"
+    p_head = _payload(adapter=dict(_payload()["adapter"], config=_CFG, revision="sha_old"))
+    with pytest.raises(storage.AdapterMismatchError):
+        storage.verify_adapter(p_head)                             # recorded rev holds other weights
+    assert storage.verify_adapter(p_head, revision="sha_head") == "sha_head"   # explicit override

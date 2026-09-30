@@ -68,8 +68,11 @@ def load_model(model_id, device_map="auto"):
     return tok, ModelWrapper(base, accelerator=None)
 
 
-def load_adapter(repo_id, subfolder, device="cuda"):
-    cfg_path = hf_hub_download(repo_id=repo_id, filename="config.json", subfolder=subfolder)
+def load_adapter(repo_id, subfolder, device="cuda", revision=None):
+    """Load a trained adapter. Pass revision= (ideally a commit hash from
+    storage.resolve_revision / verify_adapter) to pin the weights; None loads HEAD."""
+    cfg_path = hf_hub_download(repo_id=repo_id, filename="config.json", subfolder=subfolder,
+                               revision=revision)
     with open(cfg_path) as f:
         cfg = json.load(f)
     mapper = AutoEncoder(
@@ -77,7 +80,8 @@ def load_adapter(repo_id, subfolder, device="cuda"):
         target_dim=cfg["target_dim"],
         hidden_dim=cfg["hidden_dim"],
     ).to(device).half()
-    weights = hf_hub_download(repo_id=repo_id, filename="pytorch_model.bin", subfolder=subfolder)
+    weights = hf_hub_download(repo_id=repo_id, filename="pytorch_model.bin", subfolder=subfolder,
+                              revision=revision)
     mapper.load_state_dict(torch.load(weights))
     mapper.eval()
     return mapper, cfg
